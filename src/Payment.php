@@ -25,342 +25,346 @@ use Idma\Robokassa\Exception\EmptyDescriptionException;
  */
 class Payment
 {
-    const CULTURE_EN = 'en';
-    const CULTURE_RU = 'ru';
+	const CULTURE_EN = 'en';
+	const CULTURE_RU = 'ru';
 
-    private $baseUrl = 'https://auth.robokassa.ru/Merchant/Index.aspx?';
-    private $valid = false;
-    private $data;
-    private $isTestMode;
-    private $customParams = [];
+	private $baseUrl = 'https://auth.robokassa.ru/Merchant/Index.aspx?';
+	private $valid = false;
+	private $data;
+	private $isTestMode;
+	private $customParams = [];
 
-    private $login;
-    private $paymentPassword;
-    private $validationPassword;
+	private $login;
+	private $paymentPassword;
+	private $validationPassword;
 
-    /**
-     * Class constructor.
-     *
-     * @param string $login login of Merchant
-     * @param string $paymentPassword password #1
-     * @param string $validationPassword password #2
-     * @param bool $testMode use test server
-     */
-    public function __construct($login, $paymentPassword, $validationPassword, $testMode = false)
-    {
-        $this->login = $login;
-        $this->paymentPassword = $paymentPassword;
-        $this->validationPassword = $validationPassword;
-        $this->isTestMode = $testMode;
+	/**
+	 * Class constructor.
+	 *
+	 * @param string $login login of Merchant
+	 * @param string $paymentPassword password #1
+	 * @param string $validationPassword password #2
+	 * @param bool $testMode use test server
+	 */
+	public function __construct($login, $paymentPassword, $validationPassword, $testMode = false)
+	{
+		$this->login = $login;
+		$this->paymentPassword = $paymentPassword;
+		$this->validationPassword = $validationPassword;
+		$this->isTestMode = $testMode;
 
-        $this->data = [
-            'MerchantLogin' => $this->login,
-            'InvId' => null,
-            'OutSum' => 0,
-            'Desc' => null,
-            'SignatureValue' => '',
-            'Encoding' => 'utf-8',
-            'Culture' => self::CULTURE_RU,
-            'IncCurrLabel' => '',
-            'IsTest' => $testMode ? 1 : 0
-        ];
-    }
+		$this->data = [
+			'MerchantLogin' => $this->login,
+			'InvId' => null,
+			'OutSum' => 0,
+			'Desc' => null,
+			'SignatureValue' => '',
+			'Encoding' => 'utf-8',
+			'Culture' => self::CULTURE_RU,
+			'IncCurrLabel' => '',
+			'IsTest' => $testMode ? 1 : 0
+		];
+	}
 
-    /**
-     * Create payment url.
-     *
-     * @return string the payment url
-     * @throws EmptyDescriptionException if description is empty or not provided
-     * @throws InvalidInvoiceIdException if invoice ID less or equals zero or not provided
-     *
-     * @throws InvalidSumException       if sum less or equals zero
-     */
-    public function getPaymentUrl()
-    {
-        if ($this->data['OutSum'] <= 0) {
-            throw new InvalidSumException();
-        }
+	/**
+	 * Create payment url.
+	 *
+	 * @return string the payment url
+	 * @throws EmptyDescriptionException if description is empty or not provided
+	 * @throws InvalidInvoiceIdException if invoice ID less or equals zero or not provided
+	 *
+	 * @throws InvalidSumException       if sum less or equals zero
+	 */
+	public function getPaymentUrl()
+	{
+		if ($this->data['OutSum'] <= 0) {
+			throw new InvalidSumException();
+		}
 
-        if (empty($this->data['Desc'])) {
-            throw new EmptyDescriptionException();
-        }
+		if (empty($this->data['Desc'])) {
+			throw new EmptyDescriptionException();
+		}
 
-        if ($this->data['InvId'] <= 0) {
-            throw new InvalidInvoiceIdException();
-        }
+		if ($this->data['InvId'] <= 0) {
+			throw new InvalidInvoiceIdException();
+		}
 
-        $signature = vsprintf('%s:%01.2F:%u:%s', [
-            // '$login:$OutSum:$InvId:$passwordPayment'
-            $this->login,
-            $this->data['OutSum'],
-            $this->data['InvId'],
-            $this->paymentPassword
-        ]);
+		$this->data['Receipt'] = json_encode($this->data['Receipt'], JSON_UNESCAPED_UNICODE);
 
-        if ($this->customParams) {
-            // sort params alphabetically
-            ksort($this->customParams);
+		$signature = vsprintf('%s:%01.2F:%u:%s:%s', [
+			// '$login:$OutSum:$InvId:$passwordPayment'
+			$this->login,
+			$this->data['OutSum'],
+			$this->data['InvId'],
+			$this->data['Receipt'],
+			$this->paymentPassword,
+		]);
 
-            $signature .= ':' . implode(':', array_map(static function ($key, $value) {
-                return $key . '=' . $value;
-            }, array_keys($this->customParams), $this->customParams));
-        }
+		if ($this->customParams) {
+			// sort params alphabetically
+			ksort($this->customParams);
 
-        $this->data['SignatureValue'] = md5($signature);
+			$signature .= ':' . implode(':', array_map(static function ($key, $value) {
+					return $key . '=' . $value;
+				}, array_keys($this->customParams), $this->customParams));
+		}
 
-        $data = http_build_query($this->data, null, '&');
-        $custom = http_build_query($this->customParams, null, '&');
+		$this->data['SignatureValue'] = md5($signature);
+		$this->data['Receipt'] = $this->data['Receipt'];
 
-        return $this->baseUrl . $data . ($custom ? '&' . $custom : '');
-    }
+		$data = http_build_query($this->data, null, '&');
+		$custom = http_build_query($this->customParams, null, '&');
 
-    /**
-     * Validates on ResultURL.
-     *
-     * @param string $data query data
-     *
-     * @return bool
-     */
-    public function validateResult($data)
-    {
-        return $this->validate($data);
-    }
+		return $this->baseUrl . $data . ($custom ? '&' . $custom : '');
+	}
 
-    /**
-     * Validates on SuccessURL.
-     *
-     * @param string $data query data
-     *
-     * @return bool
-     */
-    public function validateSuccess($data)
-    {
-        return $this->validate($data, 'payment');
-    }
+	/**
+	 * Validates on ResultURL.
+	 *
+	 * @param string $data query data
+	 *
+	 * @return bool
+	 */
+	public function validateResult($data)
+	{
+		return $this->validate($data);
+	}
 
-    /**
-     * Validates the Robokassa query.
-     *
-     * @param string $data query data
-     * @param string $passwordType type of password, 'validation' or 'payment'
-     *
-     * @return bool
-     */
-    private function validate($data, $passwordType = 'validation')
-    {
-        $this->data = $data;
+	/**
+	 * Validates on SuccessURL.
+	 *
+	 * @param string $data query data
+	 *
+	 * @return bool
+	 */
+	public function validateSuccess($data)
+	{
+		return $this->validate($data, 'payment');
+	}
 
-        $password = $this->{$passwordType . 'Password'};
+	/**
+	 * Validates the Robokassa query.
+	 *
+	 * @param string $data query data
+	 * @param string $passwordType type of password, 'validation' or 'payment'
+	 *
+	 * @return bool
+	 */
+	private function validate($data, $passwordType = 'validation')
+	{
+		$this->data = $data;
 
-        $signature = vsprintf('%s:%u:%s%s', [
-            // '$OutSum:$InvId:$password[:$params]'
-            $data['OutSum'],
-            $data['InvId'],
-            $password,
-            $this->getCustomParamsString($this->data)
-        ]);
+		$password = $this->{$passwordType . 'Password'};
 
-        $this->valid = (md5($signature) === strtolower($data['SignatureValue']));
+		$signature = vsprintf('%s:%u:%s%s', [
+			// '$OutSum:$InvId:$password[:$params]'
+			$data['OutSum'],
+			$data['InvId'],
+			$password,
+			$this->getCustomParamsString($this->data)
+		]);
 
-        return $this->valid;
-    }
+		$this->valid = (md5($signature) === strtolower($data['SignatureValue']));
 
-    /**
-     * Returns whether the Robokassa query is valid.
-     *
-     * @return bool
-     */
-    public function isValid()
-    {
-        return $this->valid;
-    }
+		return $this->valid;
+	}
 
-    /**
-     * Adds custom parameters in payment.
-     * The 'shp_' prefix will be added automatically.
-     *
-     * @param array $params custom parameters array
-     *
-     * @return Payment
-     * @throws InvalidParamException if params is not an array
-     *
-     */
-    public function addCustomParameters($params)
-    {
-        if (!is_array($params)) {
-            throw new InvalidParamException();
-        }
+	/**
+	 * Returns whether the Robokassa query is valid.
+	 *
+	 * @return bool
+	 */
+	public function isValid()
+	{
+		return $this->valid;
+	}
 
-        foreach ($params as $key => $val) {
-            $this->customParams['shp_' . $key] = $val;
-        }
+	/**
+	 * Adds custom parameters in payment.
+	 * The 'shp_' prefix will be added automatically.
+	 *
+	 * @param array $params custom parameters array
+	 *
+	 * @return Payment
+	 * @throws InvalidParamException if params is not an array
+	 *
+	 */
+	public function addCustomParameters($params)
+	{
+		if (!is_array($params)) {
+			throw new InvalidParamException();
+		}
 
-        return $this;
-    }
+		foreach ($params as $key => $val) {
+			$this->customParams['shp_' . $key] = $val;
+		}
 
-    /**
-     * @return string
-     */
-    public function getSuccessAnswer()
-    {
-        return 'OK' . $this->getInvoiceId() . "\n";
-    }
+		return $this;
+	}
 
-    private function getCustomParamsString(array $source)
-    {
-        $params = [];
+	/**
+	 * @return string
+	 */
+	public function getSuccessAnswer()
+	{
+		return 'OK' . $this->getInvoiceId() . "\n";
+	}
 
-        foreach ($source as $key => $val) {
-            if (stripos($key, 'shp_') === 0) {
-                $params[$key] = $val;
-            }
-        }
+	private function getCustomParamsString(array $source)
+	{
+		$params = [];
 
-        ksort($params);
+		foreach ($source as $key => $val) {
+			if (stripos($key, 'shp_') === 0) {
+				$params[$key] = $val;
+			}
+		}
 
-        $params = implode(':', array_map(static function ($key, $value) {
-            return $key . '=' . $value;
-        }, array_keys($params), $params));
+		ksort($params);
 
-        return $params ? ':' . $params : '';
-    }
+		$params = implode(':', array_map(static function ($key, $value) {
+			return $key . '=' . $value;
+		}, array_keys($params), $params));
 
-    /**
-     * Get custom parameter from payment data.
-     *
-     * @param string $name parameter name without "shp_"
-     *
-     * @return mixed
-     */
-    public function getCustomParam($name)
-    {
-        $key = 'shp_' . $name;
+		return $params ? ':' . $params : '';
+	}
 
-        if (isset($this->data[$key])) {
-            return $this->data[$key];
-        }
+	/**
+	 * Get custom parameter from payment data.
+	 *
+	 * @param string $name parameter name without "shp_"
+	 *
+	 * @return mixed
+	 */
+	public function getCustomParam($name)
+	{
+		$key = 'shp_' . $name;
 
-        return null;
-    }
+		if (isset($this->data[$key])) {
+			return $this->data[$key];
+		}
 
-    /**
-     * @return int
-     */
-    public function getInvoiceId()
-    {
-        return $this->data['InvId'];
-    }
+		return null;
+	}
 
-    /**
-     * @param $id
-     *
-     * @return Payment
-     */
-    public function setInvoiceId($id)
-    {
-        $this->data['InvId'] = (int)$id;
+	/**
+	 * @return int
+	 */
+	public function getInvoiceId()
+	{
+		return $this->data['InvId'];
+	}
 
-        return $this;
-    }
+	/**
+	 * @param $id
+	 *
+	 * @return Payment
+	 */
+	public function setInvoiceId($id)
+	{
+		$this->data['InvId'] = (int)$id;
 
-    /**
-     * @return mixed
-     */
-    public function getSum()
-    {
-        return $this->data['OutSum'];
-    }
+		return $this;
+	}
 
-    /**
-     * @param mixed $summ
-     *
-     * @return Payment
-     * @throws InvalidSumException
-     *
-     */
-    public function setSum($summ)
-    {
-        $summ = number_format($summ, 2, '.', '');
+	/**
+	 * @return mixed
+	 */
+	public function getSum()
+	{
+		return $this->data['OutSum'];
+	}
 
-        if ($summ > 0) {
-            $this->data['OutSum'] = $summ;
+	/**
+	 * @param mixed $summ
+	 *
+	 * @return Payment
+	 * @throws InvalidSumException
+	 *
+	 */
+	public function setSum($summ)
+	{
+		$summ = number_format($summ, 2, '.', '');
 
-            return $this;
-        }
+		if ($summ > 0) {
+			$this->data['OutSum'] = $summ;
 
-        throw new InvalidSumException();
-    }
+			return $this;
+		}
 
-    /**
-     * @return string
-     */
-    public function getDescription()
-    {
-        return $this->data['Desc'];
-    }
+		throw new InvalidSumException();
+	}
 
-    /**
-     * @param string $description
-     *
-     * @return Payment
-     */
-    public function setDescription($description)
-    {
-        $this->data['Desc'] = (string)$description;
+	/**
+	 * @return string
+	 */
+	public function getDescription()
+	{
+		return $this->data['Desc'];
+	}
 
-        return $this;
-    }
+	/**
+	 * @param string $description
+	 *
+	 * @return Payment
+	 */
+	public function setDescription($description)
+	{
+		$this->data['Desc'] = (string)$description;
 
-    /**
-     * @return string
-     */
-    public function getCulture()
-    {
-        return $this->data['Culture'];
-    }
+		return $this;
+	}
 
-    /**
-     * @param string $culture
-     *
-     * @return Payment
-     */
-    public function setCulture($culture = self::CULTURE_RU)
-    {
-        $this->data['Culture'] = (string)$culture;
+	/**
+	 * @return string
+	 */
+	public function getCulture()
+	{
+		return $this->data['Culture'];
+	}
 
-        return $this;
-    }
+	/**
+	 * @param string $culture
+	 *
+	 * @return Payment
+	 */
+	public function setCulture($culture = self::CULTURE_RU)
+	{
+		$this->data['Culture'] = (string)$culture;
 
-    /**
-     * @return string
-     */
-    public function getCurrencyLabel()
-    {
-        return $this->data['IncCurrLabel'];
-    }
+		return $this;
+	}
 
-    /**
-     * @param string $currLabel
-     *
-     * @return Payment
-     */
-    public function setCurrencyLabel($currLabel)
-    {
-        $this->data['IncCurrLabel'] = (string)$currLabel;
+	/**
+	 * @return string
+	 */
+	public function getCurrencyLabel()
+	{
+		return $this->data['IncCurrLabel'];
+	}
 
-        return $this;
-    }
+	/**
+	 * @param string $currLabel
+	 *
+	 * @return Payment
+	 */
+	public function setCurrencyLabel($currLabel)
+	{
+		$this->data['IncCurrLabel'] = (string)$currLabel;
 
-    /**
-     * @param $email
-     * @return $this
-     */
-    public function setEmail($email)
-    {
-        $this->data['Email'] = $email;
+		return $this;
+	}
 
-        return $this;
-    }
+	/**
+	 * @param $email
+	 * @return $this
+	 */
+	public function setEmail($email)
+	{
+		$this->data['Email'] = $email;
+
+		return $this;
+	}
 
 	public function setReceipt($receipt)
 	{
