@@ -361,4 +361,11 @@ class Payment
 
         return $this;
     }
+
+	public function setReceipt($receipt)
+	{
+		$this->data['Receipt'] = $receipt;
+
+		return $this;
+	}
 }
